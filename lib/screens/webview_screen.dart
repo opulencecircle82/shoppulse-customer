@@ -1,11 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_android/webview_flutter_android.dart';
 import '../config/app_config.dart';
 
 /// The entire app: a full-screen WebView loading the web-based customer
-/// portal. Unlike the technician app, customers don't need camera or
-/// background GPS access — just booking and viewing job status/proof —
-/// so this wrapper needs no native bridging at all.
+/// portal. Unlike the technician app, customers don't need background GPS
+/// access, but they DO need this wrapper to bridge photo uploads (booking
+/// request photo, job review photo) — a bare WebView with no
+/// setOnShowFileSelector silently does nothing when a file input is
+/// tapped, since Android has no default file-chooser UI without it.
 class WebViewScreen extends StatefulWidget {
   const WebViewScreen({super.key});
 
@@ -73,12 +77,56 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
             _error = null;
           }),
           onPageFinished: (_) => setState(() => _loading = false),
-          onWebResourceError: (error) => setState(() {
-            _loading = false;
-            _error = error.description;
-          }),
+          onWebResourceError: (error) {
+            // Android reports errors for ANY failed resource on the page —
+            // a flaky image, a blocked analytics ping, a slow sub-request —
+            // not just the main document. Treating every one of those as a
+            // fatal "Could not load ShopPulse" was hiding a perfectly
+            // working page behind an error screen on good connections.
+            // Only the main-frame navigation failing is actually fatal.
+            if (error.isForMainFrame == false) return;
+            setState(() {
+              _loading = false;
+              _error = error.description;
+            });
+          },
         ),
       );
+
+    final platform = controller.platform;
+    if (platform is AndroidWebViewController) {
+      platform.setOnShowFileSelector((params) async {
+        final source = await showModalBottomSheet<ImageSource>(
+          context: context,
+          builder: (sheetContext) => SafeArea(
+            child: Wrap(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.photo_camera),
+                  title: const Text('Take Photo'),
+                  onTap: () => Navigator.pop(sheetContext, ImageSource.camera),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.photo_library),
+                  title: const Text('Choose from Gallery'),
+                  onTap: () => Navigator.pop(sheetContext, ImageSource.gallery),
+                ),
+              ],
+            ),
+          ),
+        );
+        if (source == null) return [];
+
+        final picker = ImagePicker();
+        final photo = await picker.pickImage(
+          source: source,
+          imageQuality: 80,
+          maxWidth: 1280,
+        );
+        if (photo == null) return [];
+        return ['file://${photo.path}'];
+      });
+    }
 
     controller.clearCache().then((_) {
       controller.loadRequest(Uri.parse(AppConfig.customerAppUrl));
