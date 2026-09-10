@@ -13,15 +13,49 @@ class WebViewScreen extends StatefulWidget {
   State<WebViewScreen> createState() => _WebViewScreenState();
 }
 
-class _WebViewScreenState extends State<WebViewScreen> {
+// Below this, a brief background/resume round-trip (e.g. switching to
+// pick a photo, a notification shade swipe) does NOT trigger a reload —
+// only genuinely leaving the app for a while does. This keeps the "always
+// show the latest version" fix from being disruptive on quick app
+// switches, and (for the technician app, which shares this file) avoids
+// wiping in-progress form state that a naive reload-on-every-resume
+// would cause.
+const _reloadAfterBackgroundDuration = Duration(minutes: 2);
+
+class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserver {
   late final WebViewController _controller;
   bool _loading = true;
   String? _error;
+  DateTime? _pausedAt;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _controller = _buildController();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+      _pausedAt ??= DateTime.now();
+      return;
+    }
+
+    if (state != AppLifecycleState.resumed) return;
+
+    final pausedAt = _pausedAt;
+    _pausedAt = null;
+    if (pausedAt != null &&
+        DateTime.now().difference(pausedAt) > _reloadAfterBackgroundDuration) {
+      _controller.reload();
+    }
   }
 
   WebViewController _buildController() {
