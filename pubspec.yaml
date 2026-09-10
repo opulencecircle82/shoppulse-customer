@@ -1,7 +1,7 @@
 name: shoppulse_customer
 description: ShopPulse customer app — thin Android wrapper around the web-based customer portal (sign up, book jobs, track proof).
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.0.1+2
 
 environment:
   sdk: ^3.13.2

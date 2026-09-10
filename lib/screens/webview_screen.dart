@@ -54,12 +54,16 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
     _pausedAt = null;
     if (pausedAt != null &&
         DateTime.now().difference(pausedAt) > _reloadAfterBackgroundDuration) {
-      _controller.reload();
+      // Android's WebView keeps its own disk HTTP cache that survives app
+      // restarts, so a plain reload() can still re-serve a stale page after
+      // a new deploy — clear it first so "resume after a while" always
+      // fetches the current site.
+      _controller.clearCache().then((_) => _controller.reload());
     }
   }
 
   WebViewController _buildController() {
-    return WebViewController()
+    final controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(const Color(0xFFF8FAFC))
       ..setNavigationDelegate(
@@ -74,8 +78,13 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
             _error = error.description;
           }),
         ),
-      )
-      ..loadRequest(Uri.parse(AppConfig.customerAppUrl));
+      );
+
+    controller.clearCache().then((_) {
+      controller.loadRequest(Uri.parse(AppConfig.customerAppUrl));
+    });
+
+    return controller;
   }
 
   void _retry() {
@@ -83,7 +92,7 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
       _error = null;
       _loading = true;
     });
-    _controller.reload();
+    _controller.clearCache().then((_) => _controller.reload());
   }
 
   @override
