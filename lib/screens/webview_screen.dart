@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
@@ -6,10 +7,12 @@ import '../config/app_config.dart';
 
 /// The entire app: a full-screen WebView loading the web-based customer
 /// portal. Unlike the technician app, customers don't need background GPS
-/// access, but they DO need this wrapper to bridge photo uploads (booking
+/// tracking, but two bridges are still needed: photo uploads (booking
 /// request photo, job review photo) — a bare WebView with no
 /// setOnShowFileSelector silently does nothing when a file input is
-/// tapped, since Android has no default file-chooser UI without it.
+/// tapped — and one-shot geolocation for the "use my current location"
+/// button on the address pin picker, which WebView also refuses to grant
+/// without an explicit native prompt callback.
 class WebViewScreen extends StatefulWidget {
   const WebViewScreen({super.key});
 
@@ -36,7 +39,26 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _primeLocationPermission();
     _controller = _buildController();
+  }
+
+  Future<void> _primeLocationPermission() async {
+    // Android must hold the OS-level permission before the WebView's JS
+    // geolocation calls can succeed, regardless of what the in-page
+    // permission prompt callback below allows.
+    try {
+      if (await Geolocator.isLocationServiceEnabled()) {
+        var permission = await Geolocator.checkPermission();
+        if (permission == LocationPermission.denied) {
+          await Geolocator.requestPermission();
+        }
+      }
+    } catch (_) {
+      // Non-fatal: the page's own "use my location" button will surface
+      // a clear error if location still isn't available when it's
+      // actually needed.
+    }
   }
 
   @override
@@ -95,6 +117,12 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
 
     final platform = controller.platform;
     if (platform is AndroidWebViewController) {
+      platform.setGeolocationPermissionsPromptCallbacks(
+        onShowPrompt: (request) async {
+          return const GeolocationPermissionsResponse(allow: true, retain: true);
+        },
+      );
+
       platform.setOnShowFileSelector((params) async {
         final source = await showModalBottomSheet<ImageSource>(
           context: context,
