@@ -1,6 +1,11 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 import '../config/app_config.dart';
@@ -113,6 +118,10 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
             });
           },
         ),
+      )
+      ..addJavaScriptChannel(
+        'ShopPulseNative',
+        onMessageReceived: _handleNativeBridgeMessage,
       );
 
     final platform = controller.platform;
@@ -161,6 +170,44 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
     });
 
     return controller;
+  }
+
+  /// Messages from the web page (see the `ShopPulseNative` check in
+  /// src/lib/invoice/renderInvoicePng.ts on the web side), routed to
+  /// whatever native capability the page can't reach on its own.
+  void _handleNativeBridgeMessage(JavaScriptMessage message) {
+    try {
+      final data = jsonDecode(message.message) as Map<String, dynamic>;
+      switch (data['type']) {
+        case 'downloadFile':
+          _downloadFile(data['filename'] as String, data['dataUrl'] as String);
+          break;
+      }
+    } catch (_) {
+      // Malformed bridge message — ignore rather than crash the WebView.
+    }
+  }
+
+  /// A generated file (currently just the invoice/receipt PNG) has no
+  /// meaningful "download folder" inside a WebView the way it would in a
+  /// real browser — the OS share sheet lets the customer save it wherever
+  /// they want (Files, Photos, a chat app) without needing storage
+  /// permissions, since the file only ever lives in the app's own cache.
+  Future<void> _downloadFile(String filename, String dataUrl) async {
+    try {
+      final commaIndex = dataUrl.indexOf(',');
+      if (commaIndex == -1) return;
+      final bytes = base64Decode(dataUrl.substring(commaIndex + 1));
+
+      final dir = await getTemporaryDirectory();
+      final file = File('${dir.path}/$filename');
+      await file.writeAsBytes(bytes);
+
+      await Share.shareXFiles([XFile(file.path)], text: filename);
+    } catch (_) {
+      // Non-fatal: worst case the customer just doesn't get the share
+      // sheet and can retry the download button.
+    }
   }
 
   void _retry() {
