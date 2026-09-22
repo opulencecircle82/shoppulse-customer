@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
@@ -218,53 +219,95 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
     _controller.clearCache().then((_) => _controller.reload());
   }
 
+  /// The system/gesture back button has nothing to pop in Flutter's own
+  /// navigator — this is a single-screen app — so without this it always
+  /// falls straight through to closing the app. Customers expect it to step
+  /// back to the page's natural parent instead (e.g. off the booking form
+  /// back to the dashboard) the same way a browser's back button would.
+  ///
+  /// Prefers asking the current page itself first, via the same
+  /// `__shopPulseSmartBack` handler its own "← Back" button uses (see
+  /// useSmartBack.ts on the web side) — the WebView's own back-history
+  /// (`canGoBack`/`goBack`) is NOT a reliable fallback signal here on its
+  /// own: it can report history with nothing meaningful behind it (e.g.
+  /// after the periodic background-reload elsewhere in this file resets
+  /// it), which is the same reason the web side abandoned router.back()
+  /// for a fixed-destination handler. Only a page with no such handler
+  /// registered (i.e. the dashboard root) falls through to WebView
+  /// history, and finally to closing the app.
+  Future<void> _handleBackButton(bool didPop, Object? result) async {
+    if (didPop) return;
+
+    try {
+      final hasHandler = await _controller.runJavaScriptReturningResult(
+        "typeof window.__shopPulseSmartBack === 'function'",
+      );
+      if (hasHandler == true) {
+        await _controller.runJavaScript('window.__shopPulseSmartBack()');
+        return;
+      }
+    } catch (_) {
+      // JS bridge unavailable (e.g. page still loading) — fall through.
+    }
+
+    if (await _controller.canGoBack()) {
+      _controller.goBack();
+    } else {
+      SystemNavigator.pop();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
-      body: SafeArea(
-        child: Stack(
-          children: [
-            if (_error == null) WebViewWidget(controller: _controller),
-            if (_loading && _error == null)
-              const Center(
-                child: CircularProgressIndicator(color: Color(0xFF2563EB)),
-              ),
-            if (_error != null)
-              Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Text(
-                        'Could not load ShopPulse',
-                        style: TextStyle(
-                          color: Color(0xFF0F172A),
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: _handleBackButton,
+      child: Scaffold(
+        backgroundColor: const Color(0xFFF8FAFC),
+        body: SafeArea(
+          child: Stack(
+            children: [
+              if (_error == null) WebViewWidget(controller: _controller),
+              if (_loading && _error == null)
+                const Center(
+                  child: CircularProgressIndicator(color: Color(0xFF2563EB)),
+                ),
+              if (_error != null)
+                Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Text(
+                          'Could not load ShopPulse',
+                          style: TextStyle(
+                            color: Color(0xFF0F172A),
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        _error!,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(color: Color(0xFF64748B)),
-                      ),
-                      const SizedBox(height: 20),
-                      ElevatedButton(
-                        onPressed: _retry,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF2563EB),
-                          foregroundColor: Colors.white,
+                        const SizedBox(height: 8),
+                        Text(
+                          _error!,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Color(0xFF64748B)),
                         ),
-                        child: const Text('Retry'),
-                      ),
-                    ],
+                        const SizedBox(height: 20),
+                        ElevatedButton(
+                          onPressed: _retry,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF2563EB),
+                            foregroundColor: Colors.white,
+                          ),
+                          child: const Text('Retry'),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );
